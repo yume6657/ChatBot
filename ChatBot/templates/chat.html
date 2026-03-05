@@ -1,0 +1,237 @@
+{% extends 'base.html' %}
+
+{% block title %}智能对话 - DeepSeek智能对话系统{% endblock %}
+
+{% block content %}
+<div style="display: flex; height: 600px;">
+    <!-- 侧边栏 - 对话列表 -->
+    <div style="width: 300px; border-right: 1px solid #ddd; padding-right: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h3>对话列表</h3>
+            <button onclick="createNewConversation()" class="btn" style="padding: 5px 10px; font-size: 14px;">新建对话</button>
+        </div>
+        
+        <div id="conversation-list" style="max-height: 500px; overflow-y: auto;">
+            <!-- 对话列表将通过JavaScript动态加载 -->
+        </div>
+    </div>
+    
+    <!-- 主聊天区域 -->
+    <div style="flex: 1; display: flex; flex-direction: column; margin-left: 20px;">
+        <!-- 消息显示区域 -->
+        <div id="chat-messages" style="flex: 1; border: 1px solid #ddd; border-radius: 8px; padding: 20px; margin-bottom: 20px; overflow-y: auto; max-height: 450px;">
+            <div style="text-align: center; color: #666; margin-top: 100px;">
+                <h3>欢迎使用DeepSeek智能对话系统</h3>
+                <p>请选择一个对话或创建新对话开始聊天</p>
+            </div>
+        </div>
+        
+        <!-- 输入区域 -->
+        <div style="display: flex; gap: 10px;">
+            <textarea id="message-input" placeholder="输入您的问题..." style="flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 5px; resize: vertical; min-height: 60px;"></textarea>
+            <button onclick="sendMessage()" class="btn" style="align-self: flex-end;">发送</button>
+        </div>
+        
+        <!-- 用户统计信息 -->
+        <div style="margin-top: 10px; font-size: 12px; color: #666;">
+            <span id="user-stats">总对话: 0 | 总消息: 0 | Token使用: 0</span>
+        </div>
+    </div>
+</div>
+
+<script>
+let currentConversationId = null;
+
+// 页面加载时初始化
+document.addEventListener('DOMContentLoaded', function() {
+    loadConversations();
+    loadUserStats();
+});
+
+// 加载对话列表
+function loadConversations() {
+    fetch('/api/conversations/')
+        .then(response => response.json())
+        .then(conversations => {
+            const list = document.getElementById('conversation-list');
+            list.innerHTML = '';
+            
+            conversations.forEach(conv => {
+                const div = document.createElement('div');
+                div.className = 'conversation-item';
+                div.style = 'padding: 10px; border-bottom: 1px solid #eee; cursor: pointer;';
+                div.innerHTML = `
+                    <div style="font-weight: bold;">${conv.title}</div>
+                    <div style="font-size: 12px; color: #666;">${conv.updated_at}</div>
+                    <div style="font-size: 12px; color: #999;">${conv.message_count} 条消息</div>
+                `;
+                div.onclick = () => loadConversation(conv.id);
+                list.appendChild(div);
+            });
+        })
+        .catch(error => console.error('加载对话列表失败:', error));
+}
+
+// 加载特定对话
+function loadConversation(conversationId) {
+    currentConversationId = conversationId;
+    
+    // 高亮选中的对话
+    document.querySelectorAll('.conversation-item').forEach(item => {
+        item.style.background = 'transparent';
+    });
+    event.target.closest('.conversation-item').style.background = '#f0f0f0';
+    
+    fetch(`/api/conversations/${conversationId}/messages/`)
+        .then(response => response.json())
+        .then(messages => {
+            const chatArea = document.getElementById('chat-messages');
+            chatArea.innerHTML = '';
+            
+            messages.forEach(msg => {
+                addMessageToChat(msg.role, msg.content, msg.timestamp);
+            });
+            
+            chatArea.scrollTop = chatArea.scrollHeight;
+        })
+        .catch(error => console.error('加载对话失败:', error));
+}
+
+// 创建新对话
+function createNewConversation() {
+    fetch('/api/conversations/create/', {
+        method: 'POST',
+        headers: {
+            'X-CSRFToken': getCSRFToken(),
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(conversation => {
+        currentConversationId = conversation.id;
+        document.getElementById('chat-messages').innerHTML = '';
+        loadConversations();
+    })
+    .catch(error => console.error('创建对话失败:', error));
+}
+
+// 发送消息
+function sendMessage() {
+    const input = document.getElementById('message-input');
+    const message = input.value.trim();
+    
+    if (!message) {
+        alert('请输入消息内容');
+        return;
+    }
+    
+    if (!currentConversationId) {
+        createNewConversation();
+        setTimeout(() => sendMessage(), 500);
+        return;
+    }
+    
+    // 添加用户消息到聊天界面
+    addMessageToChat('user', message, new Date().toLocaleString());
+    input.value = '';
+    
+    // 发送到服务器
+    fetch('/api/send_message/', {
+        method: 'POST',
+        headers: {
+            'X-CSRFToken': getCSRFToken(),
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            message: message,
+            conversation_id: currentConversationId
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            addMessageToChat('assistant', data.assistant_message.content, data.assistant_message.timestamp);
+            loadConversations();
+            loadUserStats();
+        } else {
+            alert('发送失败: ' + data.error);
+        }
+    })
+    .catch(error => {
+        console.error('发送消息失败:', error);
+        alert('网络错误，请重试');
+    });
+}
+
+// 添加消息到聊天界面
+function addMessageToChat(role, content, timestamp) {
+    const chatArea = document.getElementById('chat-messages');
+    const messageDiv = document.createElement('div');
+    
+    messageDiv.style = `
+        margin-bottom: 15px;
+        padding: 10px;
+        border-radius: 8px;
+        max-width: 80%;
+        ${role === 'user' ? 
+            'background: #e3f2fd; margin-left: auto; text-align: right;' : 
+            'background: #f5f5f5; margin-right: auto;'
+        }
+    `;
+    
+    messageDiv.innerHTML = `
+        <div style="font-weight: bold; margin-bottom: 5px;">
+            ${role === 'user' ? '👤 您' : '🤖 DeepSeek助手'}
+        </div>
+        <div style="white-space: pre-wrap; line-height: 1.5;">${content}</div>
+        <div style="font-size: 12px; color: #666; margin-top: 5px;">${timestamp}</div>
+    `;
+    
+    chatArea.appendChild(messageDiv);
+    chatArea.scrollTop = chatArea.scrollHeight;
+}
+
+// 加载用户统计信息
+function loadUserStats() {
+    fetch('/api/user_stats/')
+        .then(response => response.json())
+        .then(stats => {
+            document.getElementById('user-stats').innerText = 
+                `总对话: ${stats.total_conversations} | 总消息: ${stats.total_messages} | Token使用: ${stats.total_tokens_used}`;
+        })
+        .catch(error => console.error('加载统计信息失败:', error));
+}
+
+// 获取CSRF Token
+function getCSRFToken() {
+    return document.querySelector('[name=csrfmiddlewaretoken]').value;
+}
+
+// 支持回车发送
+document.getElementById('message-input').addEventListener('keypress', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+    }
+});
+</script>
+
+<style>
+.conversation-item:hover {
+    background-color: #f5f5f5 !important;
+}
+
+#chat-messages::-webkit-scrollbar {
+    width: 6px;
+}
+
+#chat-messages::-webkit-scrollbar-track {
+    background: #f1f1f1;
+}
+
+#chat-messages::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 3px;
+}
+</style>
+{% endblock %}
